@@ -46,3 +46,14 @@ jobs:
             install.ps1
             README.md
             LICENSE
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/irig_asio_installer.exe
+            target/release/irig_asio.dll
+            install.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
