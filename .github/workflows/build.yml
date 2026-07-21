@@ -25,10 +25,10 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path vendor/asio_sdk/common
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/asio.h" -OutFile "vendor/asio_sdk/common/asio.h"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/iasiodrv.h" -OutFile "vendor/asio_sdk/common/iasiodrv.h"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/asiodrvr.h" -OutFile "vendor/asio_sdk/common/asiodrvr.h"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/asiosys.h" -OutFile "vendor/asio_sdk/common/asiosys.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/audiosdk/asio/master/common/asio.h" -OutFile "vendor/asio_sdk/common/asio.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/audiosdk/asio/master/common/iasiodrv.h" -OutFile "vendor/asio_sdk/common/iasiodrv.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/audiosdk/asio/master/common/asiodrvr.h" -OutFile "vendor/asio_sdk/common/asiodrvr.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/audiosdk/asio/master/common/asiosys.h" -OutFile "vendor/asio_sdk/common/asiosys.h"
 
       - name: Build irig_asio library
         run: cargo build --package irig_asio --release
