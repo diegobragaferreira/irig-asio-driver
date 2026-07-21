@@ -1,0 +1,24 @@
+# Rust build targets
+/target/
+
+# Third-party SDKs
+/vendor/
+
+# Windows build artifacts & logs
+*.pdb
+*.lib
+*.exp
+*.log
+*.tmp
+*.bak
+
+# IDE & Editor files
+.vscode/
+.idea/
+.vs/
+*.suo
+*.user
+
+# System files
+.DS_Store
+Thumbs.db

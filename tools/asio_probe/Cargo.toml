@@ -1,0 +1,23 @@
+[package]
+name    = "asio_probe"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool to load and test the iRig ASIO driver end-to-end"
+
+[[bin]]
+name = "asio_probe"
+path = "src/main.rs"
+
+[dependencies]
+irig_asio = { path = "../../irig_asio" }
+
+[dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_System_Com",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_UI_Shell_PropertiesSystem",
+]

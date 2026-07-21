@@ -1,0 +1,68 @@
+[package]
+name = "irig_asio"
+version = "0.1.0"
+edition = "2021"
+description = "Windows ASIO driver for IK Multimedia iRig USB — built in Rust"
+authors = ["iRig ASIO Rust Driver"]
+
+# Produce a Windows DLL (in-process COM server)
+[lib]
+name = "irig_asio"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Microsoft's official Windows API bindings
+windows = { version = "0.58", features = [
+    # COM core
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    # Registry
+    "Win32_System_Registry",
+    # KS / audio
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    # Device enumeration
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
+    # File / I/O (for KS device path open)
+    "Win32_Storage_FileSystem",
+    # Threading / synchronization
+    "Win32_System_Threading",
+    "Win32_System_IO",
+    "Win32_Foundation",
+    # Error handling
+    "Win32_System_Diagnostics_Debug",
+    # Library loading (for COM)
+    "Win32_System_LibraryLoader",
+    # Security (required by CreateFileW, CreateEventW, RegCreateKeyExW)
+    "Win32_Security",
+    # WASAPI properties
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.58"
+
+# Lock-free synchronization for the real-time audio thread
+parking_lot = "0.12"
+
+# Logging to a file (avoids touching stdout in a DLL)
+log = "0.4"
+simplelog = { version = "0.12", features = ["test"] }
+
+# One-shot and reusable channels for thread coordination
+crossbeam-channel = "0.5"
+
+[build-dependencies]
+# Generates Rust FFI bindings from the Steinberg ASIO C SDK headers
+bindgen = "0.69"
+
+[dev-dependencies]
+# For integration tests
+windows = { version = "0.58", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+] }
+
+

@@ -1,0 +1,48 @@
+name: Build & Release Driver
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build Windows x64 Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Download ASIO SDK Headers
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor/asio_sdk/common
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/asio.h" -OutFile "vendor/asio_sdk/common/asio.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/iasiodrv.h" -OutFile "vendor/asio_sdk/common/iasiodrv.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/asiodrvr.h" -OutFile "vendor/asio_sdk/common/asiodrvr.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rust-audio/asio-sys/master/asio-sys/ASIOSDK/common/asiosys.h" -OutFile "vendor/asio_sdk/common/asiosys.h"
+
+      - name: Build irig_asio library
+        run: cargo build --package irig_asio --release
+
+      - name: Build 1-click Installer & Tools
+        run: cargo build --workspace --release
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: irig-asio-driver-v0.1.0-windows-x64
+          path: |
+            target/release/irig_asio_installer.exe
+            target/release/irig_asio.dll
+            install.ps1
+            README.md
+            LICENSE
