@@ -1,7 +1,7 @@
 # iRig USB ASIO Driver (Rust)
 
-[![Download Latest Release](https://img.shields.io/github/v/release/diegobragaferreira/irig-asio-driver?label=Download%20Installer%20.exe&style=for-the-badge&color=2ea44f&logo=windows)](https://github.com/diegobragaferreira/irig-asio-driver/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.style=for-the-badge)](LICENSE)
+[![Download Latest Release](https://img.shields.io/badge/Download-Installer_.exe-2ea44f?style=for-the-badge&logo=windows)](https://github.com/diegobragaferreira/irig-asio-driver/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/diegobragaferreira/irig-asio-driver/build.yml?style=for-the-badge)](https://github.com/diegobragaferreira/irig-asio-driver/actions)
 
 A ultra-low latency, open-source **Windows 10/11 ASIO driver** for the **IK Multimedia iRig USB** (and other `VID_1963` audio interfaces), written 100% in **Rust**.
