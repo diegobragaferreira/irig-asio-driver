@@ -392,11 +392,16 @@ impl IrigAsioDriver {
         let frames = buffer_size as usize;
         st.buffer_frames = frames;
 
-        let bm = match BufferManager::new(frames) {
-            Ok(b) => Arc::new(b),
-            Err(e) => {
-                st.last_error = format!("Buffer allocation failed: {e}");
-                return ASE_NO_MEMORY;
+        let bm = if let Some(existing_bm) = st.buffers.as_ref().filter(|b| b.frames == frames) {
+            log::info!("[ASIO] Reusing existing BufferManager of size {}!", frames);
+            existing_bm.clone()
+        } else {
+            match BufferManager::new(frames) {
+                Ok(b) => Arc::new(b),
+                Err(e) => {
+                    st.last_error = format!("Buffer allocation failed: {e}");
+                    return ASE_NO_MEMORY;
+                }
             }
         };
 
