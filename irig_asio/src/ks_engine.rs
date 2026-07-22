@@ -11,15 +11,22 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use windows::core::{Result as WinResult, GUID};
+use windows::core::{w, Result as WinResult, GUID};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-use windows::Win32::System::IO::{DeviceIoControl, GetOverlappedResult, OVERLAPPED};
-use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
+use windows::Win32::System::IO::{DeviceIoControl, GetOverlappedResult, OVERLAPPED};
+use windows::Win32::System::Threading::{
+    CreateEventW, GetCurrentThread, SetThreadPriority, WaitForSingleObject,
+    THREAD_PRIORITY_TIME_CRITICAL, AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW,
+};
 
 use crate::buffer_manager::BufferManager;
 use crate::constants::NUM_OUTPUT_CHANNELS;
 use crate::ks_device::{open_ks_pin, PinDirection};
+
+const RECIP_I32: f32 = 1.0 / 2147483648.0;
+const SCALE_I32: f32 = 2147483647.0;
 
 const KSPROPSETID_CONNECTION: GUID = GUID::from_values(
     0x1D58C920,
@@ -142,6 +149,17 @@ fn ks_io_loop(
 ) -> WinResult<()> {
     log::info!("[KS] Starting direct KS streaming loop on {:?}", device_path);
 
+    // MMCSS & Thread Priority Elevation + 1ms Timer Resolution
+    let mut task_idx = 0u32;
+    let mmcss_handle = unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut task_idx) };
+    if mmcss_handle.is_ok() {
+        log::info!("[KS] Elevated thread priority via MMCSS 'Pro Audio'");
+    }
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        timeBeginPeriod(1);
+    }
+
     // Open render and capture pins
     let render_pin = open_ks_pin(&device_path, PinDirection::Render)?;
     let capture_pin = open_ks_pin(&device_path, PinDirection::Capture)?;
@@ -172,7 +190,7 @@ fn ks_io_loop(
 
     buffer_manager.set_running(true);
 
-    while running.load(Ordering::Acquire) {
+    while running.load(Ordering::Relaxed) {
         // 1. Submit ReadFile on Capture Pin (Guitar Input)
         let read_res = unsafe {
             ReadFile(
@@ -195,7 +213,7 @@ fn ks_io_loop(
             }
         }
 
-        if !running.load(Ordering::Acquire) {
+        if !running.load(Ordering::Relaxed) {
             break;
         }
 
@@ -213,10 +231,10 @@ fn ks_io_loop(
             let left_i32  = src_pcm[i * 2];
             let right_i32 = src_pcm[i * 2 + 1];
 
-            // Convert 24-bit container to f32 float (-1.0 .. +1.0)
+            // Convert 24-bit container to f32 float (-1.0 .. +1.0) using reciprocal multiplication
             unsafe {
-                *ch0_ptr.add(i) = (left_i32 as f32) / 2147483648.0;
-                *ch1_ptr.add(i) = (right_i32 as f32) / 2147483648.0;
+                *ch0_ptr.add(i) = (left_i32 as f32) * RECIP_I32;
+                *ch1_ptr.add(i) = (right_i32 as f32) * RECIP_I32;
             }
         }
 
@@ -244,8 +262,8 @@ fn ks_io_loop(
                 let left_f  = *ch0_out.add(i);
                 let right_f = *ch1_out.add(i);
 
-                dst_pcm[i * 2]     = (left_f * 2147483647.0) as i32;
-                dst_pcm[i * 2 + 1] = (right_f * 2147483647.0) as i32;
+                dst_pcm[i * 2]     = (left_f * SCALE_I32) as i32;
+                dst_pcm[i * 2 + 1] = (right_f * SCALE_I32) as i32;
             }
         }
 
@@ -278,6 +296,10 @@ fn ks_io_loop(
     unsafe {
         let _ = CloseHandle(cap_event);
         let _ = CloseHandle(ren_event);
+        timeEndPeriod(1);
+        if let Ok(handle) = mmcss_handle {
+            let _ = AvRevertMmThreadCharacteristics(handle);
+        }
     }
 
     log::info!("[KS] Streaming loop finished");

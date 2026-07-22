@@ -40,6 +40,7 @@ use crate::constants::{NUM_INPUT_CHANNELS, NUM_OUTPUT_CHANNELS};
 pub type BufferIndex = i32;
 
 /// One half of a double-buffer pair for a single channel.
+#[repr(C, align(64))]
 #[derive(Debug)]
 pub struct ChannelBuffer {
     /// Raw PCM samples (32-bit words, 24-bit data left-aligned).
@@ -67,6 +68,7 @@ impl ChannelBuffer {
 }
 
 /// Double-buffer pair for one channel (A + B).
+#[repr(C, align(64))]
 pub struct DoubleBuffer {
     pub a: ChannelBuffer,
     pub b: ChannelBuffer,

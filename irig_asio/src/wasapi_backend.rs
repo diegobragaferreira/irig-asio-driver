@@ -14,12 +14,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use windows::core::{Result as WinResult, GUID};
+use windows::core::{w, Result as WinResult, GUID};
 use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::*;
+use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows::Win32::System::Com::*;
 use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
-use windows::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForSingleObject};
+use windows::Win32::System::Threading::{
+    CreateEventW, GetCurrentThread, ResetEvent, SetThreadPriority, WaitForSingleObject,
+    THREAD_PRIORITY_TIME_CRITICAL, AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW,
+};
 use windows::Win32::UI::Shell::PropertiesSystem::*;
 
 use crate::buffer_manager::BufferManager;
@@ -27,6 +31,20 @@ use crate::ks_device::{get_irig_capture_path, ks_transition_to_run, open_ks_pin,
 
 const WAVE_FORMAT_IEEE_FLOAT: u32 = 0x0003;
 const WAVE_FORMAT_EXTENSIBLE: u32 = 0xFFFE;
+
+const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID = GUID::from_values(
+    0x00000003,
+    0x0000,
+    0x0010,
+    [0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71],
+);
+
+// DSP Reciprocal conversion constants (eliminates float divisions in hot loop)
+const RECIP_I16: f32 = 1.0 / 32768.0;
+const RECIP_I24: f32 = 1.0 / 8388608.0;
+const RECIP_I32: f32 = 1.0 / 2147483648.0;
+const SCALE_I16: f32 = 32767.0;
+const SCALE_I32: f32 = 2147483647.0;
 
 const PKEY_DEVICE_FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_values(
@@ -158,7 +176,7 @@ impl KsCaptureState {
             // 16-bit PCM mono (2 bytes per sample) - standard iRig ADC format
             let src = self.buf.as_ptr() as *const i16;
             for i in 0..frames {
-                let v = (*src.add(i)) as f32 / 32768.0;
+                let v = (*src.add(i)) as f32 * RECIP_I16;
                 *ch0.add(i) = v;
                 *ch1.add(i) = v;
             }
@@ -170,7 +188,7 @@ impl KsCaptureState {
                         | ((self.buf[off + 1] as i32) << 8)
                         | ((self.buf[off + 2] as i32) << 16);
                 let signed_val = if raw & 0x800000 != 0 { raw | !0xFFFFFF } else { raw };
-                let v = signed_val as f32 / 8_388_608.0;
+                let v = signed_val as f32 * RECIP_I24;
                 *ch0.add(i) = v;
                 *ch1.add(i) = v;
             }
@@ -178,7 +196,7 @@ impl KsCaptureState {
             // 32-bit or 24-bit in 32-bit container PCM mono
             let src = self.buf.as_ptr() as *const i32;
             for i in 0..frames {
-                let v = (*src.add(i)) as f32 / 2_147_483_648.0;
+                let v = (*src.add(i)) as f32 * RECIP_I32;
                 *ch0.add(i) = v;
                 *ch1.add(i) = v;
             }
@@ -252,8 +270,8 @@ impl KsRenderState {
 
         let dst = self.buf.as_mut_ptr() as *mut i16;
         for i in 0..buf_frames {
-            let l = ((*ch0.add(i)).clamp(-1.0, 1.0) * 32767.0) as i16;
-            let r = ((*ch1.add(i)).clamp(-1.0, 1.0) * 32767.0) as i16;
+            let l = ((*ch0.add(i)).clamp(-1.0, 1.0) * SCALE_I16) as i16;
+            let r = ((*ch1.add(i)).clamp(-1.0, 1.0) * SCALE_I16) as i16;
             *dst.add(i * 2) = l;
             *dst.add(i * 2 + 1) = r;
         }
@@ -505,6 +523,15 @@ fn wasapi_io_loop(
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
+        // 1. MMCSS & Thread Priority Elevation + 1ms Timer Resolution
+        let mut task_idx = 0u32;
+        let mmcss_handle = AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut task_idx);
+        if mmcss_handle.is_ok() {
+            log::info!("[WASAPI] Elevated thread priority via MMCSS 'Pro Audio'");
+        }
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        timeBeginPeriod(1);
+
         let capture_device = find_endpoint(eCapture).ok();
         let render_device  = find_endpoint(eRender).ok();
 
@@ -544,7 +571,13 @@ fn wasapi_io_loop(
             if let Ok(wfx) = c.GetMixFormat() {
                 let w = *wfx;
                 cap_bits = w.wBitsPerSample; cap_channels = w.nChannels;
-                cap_is_float = cap_bits == 32 || w.wFormatTag == WAVE_FORMAT_IEEE_FLOAT as u16 || w.wFormatTag == WAVE_FORMAT_EXTENSIBLE as u16;
+                if w.wFormatTag == WAVE_FORMAT_EXTENSIBLE as u16 {
+                    let w_ext = wfx as *const WAVEFORMATEXTENSIBLE;
+                    let subformat = (*w_ext).SubFormat;
+                    cap_is_float = subformat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+                } else {
+                    cap_is_float = cap_bits == 32 || w.wFormatTag == WAVE_FORMAT_IEEE_FLOAT as u16;
+                }
                 let _ = c.Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, buffer_duration_hns, 0, wfx, None);
                 let _ = c.SetEventHandle(event_handle);
                 CoTaskMemFree(Some(wfx as _));
@@ -556,7 +589,13 @@ fn wasapi_io_loop(
             if let Ok(wfx) = c.GetMixFormat() {
                 let w = *wfx;
                 ren_bits = w.wBitsPerSample; ren_channels = w.nChannels;
-                ren_is_float = ren_bits == 32 || w.wFormatTag == WAVE_FORMAT_IEEE_FLOAT as u16 || w.wFormatTag == WAVE_FORMAT_EXTENSIBLE as u16;
+                if w.wFormatTag == WAVE_FORMAT_EXTENSIBLE as u16 {
+                    let w_ext = wfx as *const WAVEFORMATEXTENSIBLE;
+                    let subformat = (*w_ext).SubFormat;
+                    ren_is_float = subformat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+                } else {
+                    ren_is_float = ren_bits == 32 || w.wFormatTag == WAVE_FORMAT_IEEE_FLOAT as u16;
+                }
                 let flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
                 let _ = c.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, buffer_duration_hns, 0, wfx, None);
                 let _ = c.SetEventHandle(event_handle);
@@ -607,7 +646,7 @@ fn wasapi_io_loop(
         buffer_manager.set_running(true);
         let mut consecutive_failures = 0u32;
 
-        while running.load(Ordering::Acquire) {
+        while running.load(Ordering::Relaxed) {
             let active_event = if let Some(ref ks) = ks_cap {
                 ks.event
             } else {
@@ -615,11 +654,11 @@ fn wasapi_io_loop(
             };
 
             let wait = WaitForSingleObject(active_event, 20);
-            if wait != WAIT_OBJECT_0 && running.load(Ordering::Acquire) {
+            if wait != WAIT_OBJECT_0 && running.load(Ordering::Relaxed) {
                 thread::sleep(std::time::Duration::from_micros(
                     (1_000_000.0 * buffer_frames as f64 / sample_rate as f64) as u64));
             }
-            if !running.load(Ordering::Acquire) { break; }
+            if !running.load(Ordering::Relaxed) { break; }
 
             let hw_idx = buffer_manager.swap_index();
             let render_idx = 1 - hw_idx;
@@ -644,10 +683,10 @@ fn wasapi_io_loop(
                                 for i in 0..n { *ch0.add(i) = s[i]; *ch1.add(i) = s[i]; }
                             } else if cap_bits == 16 {
                                 let s = std::slice::from_raw_parts(dptr as *const i16, n);
-                                for i in 0..n { let v = s[i] as f32 / 32768.0; *ch0.add(i) = v; *ch1.add(i) = v; }
+                                for i in 0..n { let v = s[i] as f32 * RECIP_I16; *ch0.add(i) = v; *ch1.add(i) = v; }
                             } else {
                                 let s = std::slice::from_raw_parts(dptr as *const i32, n);
-                                for i in 0..n { let v = s[i] as f32 / 2_147_483_648.0; *ch0.add(i) = v; *ch1.add(i) = v; }
+                                for i in 0..n { let v = s[i] as f32 * RECIP_I32; *ch0.add(i) = v; *ch1.add(i) = v; }
                             }
                         } else {
                             if cap_is_float {
@@ -655,10 +694,10 @@ fn wasapi_io_loop(
                                 for i in 0..n { *ch0.add(i) = s[i*2]; *ch1.add(i) = s[i*2+1]; }
                             } else if cap_bits == 16 {
                                 let s = std::slice::from_raw_parts(dptr as *const i16, n*2);
-                                for i in 0..n { *ch0.add(i) = s[i*2] as f32/32768.0; *ch1.add(i) = s[i*2+1] as f32/32768.0; }
+                                for i in 0..n { *ch0.add(i) = s[i*2] as f32 * RECIP_I16; *ch1.add(i) = s[i*2+1] as f32 * RECIP_I16; }
                             } else {
                                 let s = std::slice::from_raw_parts(dptr as *const i32, n*2);
-                                for i in 0..n { *ch0.add(i) = s[i*2] as f32/2_147_483_648.0; *ch1.add(i) = s[i*2+1] as f32/2_147_483_648.0; }
+                                for i in 0..n { *ch0.add(i) = s[i*2] as f32 * RECIP_I32; *ch1.add(i) = s[i*2+1] as f32 * RECIP_I32; }
                             }
                         }
                         let _ = cap.ReleaseBuffer(frames);
@@ -702,10 +741,10 @@ fn wasapi_io_loop(
                                         for i in 0..n { d[i] = ((*ch0.add(i) + *ch1.add(i)) * 0.5).clamp(-1.0, 1.0); }
                                     } else if ren_bits == 16 {
                                         let d = std::slice::from_raw_parts_mut(dptr as *mut i16, n);
-                                        for i in 0..n { d[i] = (((*ch0.add(i) + *ch1.add(i)) * 0.5).clamp(-1.0, 1.0) * 32767.0) as i16; }
+                                        for i in 0..n { d[i] = (((*ch0.add(i) + *ch1.add(i)) * 0.5).clamp(-1.0, 1.0) * SCALE_I16) as i16; }
                                     } else {
                                         let d = std::slice::from_raw_parts_mut(dptr as *mut i32, n);
-                                        for i in 0..n { d[i] = (((*ch0.add(i) + *ch1.add(i)) * 0.5).clamp(-1.0, 1.0) * 2_147_483_647.0) as i32; }
+                                        for i in 0..n { d[i] = (((*ch0.add(i) + *ch1.add(i)) * 0.5).clamp(-1.0, 1.0) * SCALE_I32) as i32; }
                                     }
                                 } else {
                                     if ren_is_float {
@@ -713,10 +752,10 @@ fn wasapi_io_loop(
                                         for i in 0..n { d[i * 2] = (*ch0.add(i)).clamp(-1.0, 1.0); d[i * 2 + 1] = (*ch1.add(i)).clamp(-1.0, 1.0); }
                                     } else if ren_bits == 16 {
                                         let d = std::slice::from_raw_parts_mut(dptr as *mut i16, n * 2);
-                                        for i in 0..n { d[i * 2] = ((*ch0.add(i)).clamp(-1.0, 1.0) * 32767.0) as i16; d[i * 2 + 1] = ((*ch1.add(i)).clamp(-1.0, 1.0) * 32767.0) as i16; }
+                                        for i in 0..n { d[i * 2] = ((*ch0.add(i)).clamp(-1.0, 1.0) * SCALE_I16) as i16; d[i * 2 + 1] = ((*ch1.add(i)).clamp(-1.0, 1.0) * SCALE_I16) as i16; }
                                     } else {
                                         let d = std::slice::from_raw_parts_mut(dptr as *mut i32, n * 2);
-                                        for i in 0..n { d[i * 2] = ((*ch0.add(i)).clamp(-1.0, 1.0) * 2_147_483_647.0) as i32; d[i * 2 + 1] = ((*ch1.add(i)).clamp(-1.0, 1.0) * 2_147_483_647.0) as i32; }
+                                        for i in 0..n { d[i * 2] = ((*ch0.add(i)).clamp(-1.0, 1.0) * SCALE_I32) as i32; d[i * 2 + 1] = ((*ch1.add(i)).clamp(-1.0, 1.0) * SCALE_I32) as i32; }
                                     }
                                 }
                                 let _ = ren.ReleaseBuffer(to_write as u32, 0);
@@ -741,6 +780,12 @@ fn wasapi_io_loop(
         if let Some(ref c) = render_client  { let _ = c.Stop(); }
         drop(ks_cap);
         let _ = CloseHandle(event_handle);
+
+        timeEndPeriod(1);
+        if let Ok(handle) = mmcss_handle {
+            let _ = AvRevertMmThreadCharacteristics(handle);
+        }
+
         log::info!("[WASAPI] Stream loop finished");
     }
     Ok(())
