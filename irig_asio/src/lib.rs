@@ -62,10 +62,10 @@ pub unsafe extern "system" fn DllMain(
 #[no_mangle]
 pub unsafe extern "system" fn DllGetClassObject(
     rclsid: *const GUID,
-    _riid: *const GUID,
+    riid: *const GUID,
     ppv: *mut *mut c_void,
 ) -> HRESULT {
-    if rclsid.is_null() || ppv.is_null() {
+    if rclsid.is_null() || riid.is_null() || ppv.is_null() {
         return E_NOINTERFACE;
     }
 
@@ -75,10 +75,17 @@ pub unsafe extern "system" fn DllGetClassObject(
         return E_NOINTERFACE;
     }
 
+    use crate::com_server::{cf_query_interface, cf_release};
     let factory = ClassFactory::new();
-    *ppv = Box::into_raw(factory) as *mut c_void;
-    log::info!("[COM] DllGetClassObject: returning ClassFactory");
-    S_OK
+    let raw_factory = Box::into_raw(factory);
+    let hr = cf_query_interface(raw_factory, riid, ppv as *mut *mut std::ffi::c_void);
+    if hr != S_OK {
+        drop(Box::from_raw(raw_factory));
+    } else {
+        cf_release(raw_factory);
+        log::info!("[COM] DllGetClassObject: returning ClassFactory queried successfully");
+    }
+    hr
 }
 
 // ---------------------------------------------------------------------------

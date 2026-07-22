@@ -77,12 +77,12 @@ impl ClassFactory {
     }
 }
 
-unsafe extern "system" fn cf_query_interface(
+pub(crate) unsafe extern "system" fn cf_query_interface(
     this: *mut ClassFactory,
     iid: *const GUID,
     ppv: *mut *mut std::ffi::c_void,
 ) -> HRESULT {
-    if iid.is_null() || ppv.is_null() { return E_NOINTERFACE; }
+    if this.is_null() || iid.is_null() || ppv.is_null() { return E_NOINTERFACE; }
     let iid_ref = &*iid;
     if *iid_ref == IID_IUNKNOWN || *iid_ref == IID_ICLASSFACTORY {
         *ppv = this as *mut std::ffi::c_void;
@@ -95,10 +95,12 @@ unsafe extern "system" fn cf_query_interface(
 }
 
 unsafe extern "system" fn cf_add_ref(this: *mut ClassFactory) -> u32 {
+    if this.is_null() { return 0; }
     (*this).ref_count.fetch_add(1, Ordering::SeqCst) as u32 + 1
 }
 
-unsafe extern "system" fn cf_release(this: *mut ClassFactory) -> u32 {
+pub(crate) unsafe extern "system" fn cf_release(this: *mut ClassFactory) -> u32 {
+    if this.is_null() { return 0; }
     let prev = (*this).ref_count.fetch_sub(1, Ordering::SeqCst);
     if prev == 1 {
         drop(Box::from_raw(this));
@@ -110,17 +112,26 @@ unsafe extern "system" fn cf_release(this: *mut ClassFactory) -> u32 {
 unsafe extern "system" fn cf_create_instance(
     _this: *mut ClassFactory,
     outer: *mut std::ffi::c_void,
-    _iid: *const GUID,
+    iid: *const GUID,
     ppv: *mut *mut std::ffi::c_void,
 ) -> HRESULT {
     if !outer.is_null() {
         return CLASS_E_NOAGGREGATION;
     }
-    use crate::asio_com::IrigAsioDriverCom;
+    if iid.is_null() || ppv.is_null() {
+        return E_NOINTERFACE;
+    }
+    use crate::asio_com::{IrigAsioDriverCom, iasio_query_interface, iasio_release};
     let driver = IrigAsioDriverCom::new();
-    *ppv = Box::into_raw(driver) as *mut std::ffi::c_void;
-    log::info!("[COM] IrigAsioDriverCom instance created (with IASIO vtable)");
-    S_OK
+    let raw_driver = Box::into_raw(driver);
+    let hr = iasio_query_interface(raw_driver, iid, ppv);
+    if hr != S_OK {
+        drop(Box::from_raw(raw_driver));
+    } else {
+        iasio_release(raw_driver);
+        log::info!("[COM] IrigAsioDriverCom instance created and queried successfully");
+    }
+    hr
 }
 
 unsafe extern "system" fn cf_lock_server(

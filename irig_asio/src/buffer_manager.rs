@@ -44,21 +44,25 @@ pub type BufferIndex = i32;
 pub struct ChannelBuffer {
     /// Raw PCM samples (32-bit words, 24-bit data left-aligned).
     pub data: Vec<i32>,
+    raw_ptr: *mut i32,
 }
+
+unsafe impl Send for ChannelBuffer {}
+unsafe impl Sync for ChannelBuffer {}
 
 impl ChannelBuffer {
     pub fn new(frames: usize) -> Self {
-        Self {
-            data: vec![0i32; frames],
-        }
+        let mut data = vec![0i32; frames];
+        let raw_ptr = data.as_mut_ptr();
+        Self { data, raw_ptr }
     }
 
     pub fn as_ptr(&self) -> *const i32 {
-        self.data.as_ptr()
+        self.raw_ptr as *const i32
     }
 
     pub fn as_mut_ptr(&self) -> *mut i32 {
-        self.data.as_ptr() as *mut i32
+        self.raw_ptr
     }
 }
 

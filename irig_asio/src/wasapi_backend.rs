@@ -59,6 +59,13 @@ struct KsCaptureState {
 
 impl Drop for KsCaptureState {
     fn drop(&mut self) {
+        if self.pending {
+            unsafe {
+                let _ = windows::Win32::System::IO::CancelIoEx(self.pin.handle, Some(&*self.overlapped));
+                let mut xfer = 0u32;
+                let _ = windows::Win32::System::IO::GetOverlappedResult(self.pin.handle, &mut *self.overlapped, &mut xfer, true);
+            }
+        }
         unsafe { let _ = CloseHandle(self.event); }
     }
 }
@@ -86,6 +93,10 @@ impl KsCaptureState {
     unsafe fn submit_read(&mut self) {
         use windows::Win32::System::IO::DeviceIoControl;
         use windows::Win32::Media::KernelStreaming::{IOCTL_KS_READ_STREAM, KSSTREAM_HEADER, KSTIME};
+
+        let h_event = self.overlapped.hEvent;
+        *self.overlapped = OVERLAPPED::default();
+        self.overlapped.hEvent = h_event;
 
         self.header.Size = std::mem::size_of::<KSSTREAM_HEADER>() as u32;
         self.header.TypeSpecificFlags = 0;
@@ -195,6 +206,13 @@ struct KsRenderState {
 
 impl Drop for KsRenderState {
     fn drop(&mut self) {
+        if self.pending {
+            unsafe {
+                let _ = windows::Win32::System::IO::CancelIoEx(self.pin.handle, Some(&*self.overlapped));
+                let mut xfer = 0u32;
+                let _ = windows::Win32::System::IO::GetOverlappedResult(self.pin.handle, &mut *self.overlapped, &mut xfer, true);
+            }
+        }
         unsafe { let _ = CloseHandle(self.event); }
     }
 }
@@ -227,6 +245,10 @@ impl KsRenderState {
             let _ = GetOverlappedResult(self.pin.handle, &mut *self.overlapped, &mut xfer, true);
             self.pending = false;
         }
+
+        let h_event = self.overlapped.hEvent;
+        *self.overlapped = OVERLAPPED::default();
+        self.overlapped.hEvent = h_event;
 
         let dst = self.buf.as_mut_ptr() as *mut i16;
         for i in 0..buf_frames {
@@ -310,6 +332,12 @@ impl WasapiStream {
 
     pub fn get_sample_position(&self) -> u64 {
         self.sample_count.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for WasapiStream {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
